@@ -6,6 +6,8 @@
 int main(){
     int servidor;
     int cliente;
+    char buffer[4096];
+    ssize_t bytes;
 
     //inicio del sv TCP
     servidor = iniciar_servidor(8080);
@@ -16,19 +18,29 @@ int main(){
 
     //mantenemos el server activo con el while y esperando clientes
     while (1){
-        cliente = aceptar_cliente(servidor);
+        cliente = aceptar_cliente(servidor); //aceptamos la conexion del cliente
 
         if(cliente == -1){
             continue;
         }
 
-        //probamos la conexion
-        printf("Conexion recibida correctamente \n");
+        //recibimos los datos enviados por el cliente
+        bytes = recibir_datos(cliente, buffer, sizeof(buffer));
 
-        close(cliente);
+        if (bytes > 0 ){
+            printf("Datos recibidos: %zd bytes\n", bytes);
+            printf("%s\n", buffer);
+        }
+
+        if (bytes == 0){
+            printf("El cliente cerro la conexion\n");
+        }
+
+        close(cliente); // se cierra el cliente
     }
 
     close(servidor);
+    
     return 0;
 }
 

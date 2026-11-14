@@ -61,3 +61,22 @@ int aceptar_cliente(int servidor) {
 
     return cliente;
 }
+
+ssize_t recibir_datos(int cliente, char *buffer, int tamanio){
+    ssize_t bytes;
+
+    //Reservamos un byte para que termine la cadena con \0
+    bytes = recv(cliente, buffer, tamanio - 1, 0);
+
+    if (bytes == -1){
+        perror("Error recv");
+        return -1;
+    }
+
+    //terminamos la cadena para poder imprimirla como texto 
+    if (bytes > 0){
+        buffer[bytes] = '\0';
+    }
+    return bytes;
+    
+}
