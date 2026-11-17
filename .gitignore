@@ -1,2 +1,4 @@
 build/
-minihttpd\*n.o
+minihttpd
+*.o
+GuiaEstudio-MiniHTTPd.pdf

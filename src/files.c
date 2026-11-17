@@ -1,3 +1,10 @@
+/*
+ * files.c - Acceso seguro a los archivos estáticos de la carpeta raíz.
+ *
+ * resolver_ruta() convierte la URL en una ruta real del disco y
+ * comprueba que siga DENTRO de la raíz (anti directory traversal).
+ * leer_archivo() carga el archivo completo en memoria.
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -9,6 +16,7 @@
 
 #include "files.h"
 
+// Lee el archivo entero en un buffer con malloc (el que llama hace free)
 int leer_archivo(const char *ruta, char **contenido, size_t *tamanio) {
     int archivo;
     struct stat datos;
@@ -21,6 +29,8 @@ int leer_archivo(const char *ruta, char **contenido, size_t *tamanio) {
         return -1;
     }
 
+    // fstat -> struct stat: st_size = tamaño, st_mode = tipo de archivo
+    // S_ISREG: solo archivos regulares (no directorios, dispositivos...)
     if (fstat(archivo, &datos) == -1 || !S_ISREG(datos.st_mode)) {
         close(archivo);
         return -1;
@@ -32,6 +42,7 @@ int leer_archivo(const char *ruta, char **contenido, size_t *tamanio) {
         return -1;
     }
 
+    // read() puede leer menos de lo pedido: repetimos hasta completar
     while (total < (size_t)datos.st_size) {
         bytes = read(archivo, buffer + total,
                      (size_t)datos.st_size - total);
@@ -58,7 +69,8 @@ static int valor_hex(char c) {
     return -1;
 }
 
-// Decodifica %XX. -1 si el formato es inválido o aparece %00.
+// Decodifica %XX (ej. %20 = espacio, %2e = '.').
+// -1 si el formato es inválido o aparece %00 (byte nulo -> 400).
 // Se decodifica ANTES de buscar ".." y de llamar a realpath().
 static int decodificar_url(const char *origen, size_t longitud,
                            char *destino, size_t capacidad) {
@@ -110,6 +122,14 @@ static int codigo_por_errno(void) {
     return 500;
 }
 
+/*
+ * Defensa contra "GET /../../etc/passwd":
+ *   1. Decodificar %XX (si no, %2e%2e/ esquivaría el filtro).
+ *   2. Rechazar ".." (primera barrera, rápida).
+ *   3. realpath(): resuelve "..", "." y enlaces simbólicos y da la ruta
+ *      ABSOLUTA real. Si no empieza por la raíz -> 403 Forbidden.
+ * Devuelve 0 si todo bien; si no, el código HTTP (400/403/404/500).
+ */
 int resolver_ruta(const char *directorio, const char *ruta_url,
                   char *ruta_final, size_t capacidad) {
     char raiz[PATH_MAX];
@@ -150,10 +170,12 @@ int resolver_ruta(const char *directorio, const char *ruta_url,
         return 400;
     }
 
+    // realpath falla si el archivo no existe (ENOENT -> 404)
     if (realpath(temporal, ruta_real) == NULL) {
         return codigo_por_errno();
     }
 
+    // Defensa definitiva: la ruta real debe estar dentro de la raíz
     if (!dentro_de_raiz(raiz, ruta_real)) {
         return 403;
     }

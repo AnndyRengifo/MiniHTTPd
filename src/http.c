@@ -1,3 +1,14 @@
+/*
+ * http.c - Parsing de la petición GET y generación de la respuesta.
+ *
+ * Una petición HTTP/1.1 tiene esta forma (cada línea termina en \r\n):
+ *
+ *   GET /index.html HTTP/1.1      <- línea de solicitud
+ *   Host: localhost:8080          <- cabeceras "Nombre: valor"
+ *   User-Agent: curl/8.0
+ *   Connection: keep-alive
+ *                                 <- línea vacía = fin de cabeceras
+ */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -9,7 +20,8 @@
 #include "mime.h"
 #include "server.h"
 
-// Copia un campo verificando que tenga espacio suficiente
+// Copia un campo verificando que tenga espacio suficiente.
+// Reemplaza a strcpy: si no cabe, error (nunca desborda).
 static int copiar_campo(char *destino, size_t capacidad,
                         const char *origen, size_t longitud) {
     if (longitud >= capacidad) {
@@ -48,6 +60,7 @@ enum resultado_analisis analizar_solicitud(const char *buffer,
     memset(solicitud, 0, sizeof(*solicitud));
 
     // ---- 1. Línea de solicitud: METODO RUTA VERSION ----
+    // Se separa por los dos espacios: sp1 y sp2
     fin_linea = strstr(buffer, "\r\n");
     if (fin_linea == NULL) {
         return ANALISIS_SOLICITUD_INVALIDA;
@@ -94,7 +107,7 @@ enum resultado_analisis analizar_solicitud(const char *buffer,
     solicitud->mantener_conexion =
         (strcmp(solicitud->version, "HTTP/1.1") == 0);
 
-    // ---- 2. Cabeceras ----
+    // ---- 2. Cabeceras: una por línea, "Nombre: valor" ----
     fin = strstr(buffer, "\r\n\r\n");
     if (fin == NULL) {
         return ANALISIS_SOLICITUD_INVALIDA;
@@ -122,6 +135,7 @@ enum resultado_analisis analizar_solicitud(const char *buffer,
         if (copiar_campo(nombre, sizeof(nombre), linea,
                          (size_t)(dos_puntos - linea)) == 0) {
 
+            // Los nombres de cabecera no distinguen mayúsculas
             for (size_t i = 0; nombre[i] != '\0'; i++) {
                 nombre[i] = (char)tolower((unsigned char)nombre[i]);
             }
@@ -177,6 +191,13 @@ static const char *texto_estado(int codigo) {
 }
 
 // Escribe SOLO la cabecera. Devuelve su longitud o -1 si no cabe.
+// snprintf (no sprintf) nunca escribe más de 'capacidad' bytes.
+// Respuesta generada:
+//   HTTP/1.1 200 OK
+//   Content-Type: text/html          <- tipo MIME (mime.c)
+//   Content-Length: 347              <- tamaño exacto del cuerpo
+//   Connection: keep-alive | close
+//   (línea vacía y luego el cuerpo)
 int construir_cabecera(char *buffer, size_t capacidad,
                        int codigo, const char *tipo_mime,
                        size_t longitud_cuerpo, int mantener_conexion) {
@@ -200,6 +221,7 @@ int construir_cabecera(char *buffer, size_t capacidad,
     return r;
 }
 
+// Respuesta de error con un pequeño cuerpo HTML (400, 403, 404...)
 int enviar_error(int cliente, int codigo, int mantener_conexion) {
     char cuerpo[160];
     char cabecera[512];
@@ -236,6 +258,8 @@ static void registrar(const struct solicitud *sol, int codigo) {
     fflush(stdout);
 }
 
+// Flujo completo: analizar -> resolver ruta (files.c) -> leer archivo
+// -> cabecera con MIME -> enviar. Devuelve 1 = keep-alive, 0 = cerrar.
 int procesar_peticion(int cliente, char *buffer, size_t tam,
                       const char *raiz) {
     struct solicitud sol;

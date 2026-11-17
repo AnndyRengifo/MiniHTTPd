@@ -15,13 +15,14 @@ enum resultado_analisis {
     ANALISIS_METODO_NO_PERMITIDO
 };
 
+// Resultado del parsing: lo que nos interesa de la petición
 struct solicitud {
     char metodo[16];
     char ruta[256];
     char version[16];
     char host[256];
     char user_agent[256];
-    int  mantener_conexion;
+    int  mantener_conexion;   // 1 = keep-alive, 0 = close
 };
 
 enum resultado_analisis analizar_solicitud(const char *buffer,
