@@ -1,0 +1,10 @@
+body {
+    font-family: sans-serif;
+    max-width: 600px;
+    margin: 3rem auto;
+    text-align: center;
+    background: #101820;
+    color: #f2f2f2;
+}
+h1 { color: #4fc3f7; }
+img { max-width: 100%; border-radius: 8px; }
