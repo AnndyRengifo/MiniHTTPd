@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
@@ -7,6 +6,7 @@
 #include <netinet/in.h>
 
 #include "server.h"
+#include <errno.h>
 
 int iniciar_servidor(int puerto) {
     int servidor;
@@ -78,5 +78,36 @@ ssize_t recibir_datos(int cliente, char *buffer, int tamanio){
         buffer[bytes] = '\0';
     }
     return bytes;
-    
+
 }
+
+ssize_t enviar_datos(int cliente, const char *buffer, size_t tamanio) {
+    size_t enviados = 0;
+    ssize_t bytes;
+
+    // Enviamos hasta completar todos los datos
+    while (enviados < tamanio) {
+
+        bytes = send(cliente, buffer + enviados,
+                     tamanio - enviados, 0);
+
+        if (bytes == -1) {
+            // Si la llamada fue interrumpida, intentamos nuevamente
+            if (errno == EINTR) {
+                continue;
+            }
+
+            perror("Error send");
+            return -1;
+        }
+
+        if (bytes == 0) {
+            break;
+        }
+
+        enviados += bytes;
+    }
+
+    return enviados;
+}
+
