@@ -3,42 +3,39 @@
 
 #include <stddef.h>
 
-/*Limites de tamano si se superan la respuesta es 400 bad request*/
-#define MAX_LINEA_SOLICITUD 2048  
-#define MAX_URI 255
-#define MAX_CABECERA 8192
-#define MAX_NUM_CABECERAS 64
+// Límites de seguridad (si se superan -> 400 Bad Request)
+#define MAX_LINEA_SOLICITUD 2048   // "GET /ruta HTTP/1.1"
+#define MAX_URI             255    // cabe en solicitud.ruta[256]
+#define MAX_NUM_CABECERAS   50
+#define MAX_CABECERA        8192   // bloque completo de cabeceras
 
-/*Resultado de analizar una solicitud*/
-enum resultado_analisis{
+enum resultado_analisis {
     ANALISIS_OK = 0,
-    ANALISIS_SOLICITUD_INVALIDA, /* 400 bad request*/
-    ANALISIS_METODO_NO_PERMITIDO /*405 Method not allowed*/
+    ANALISIS_SOLICITUD_INVALIDA,
+    ANALISIS_METODO_NO_PERMITIDO
 };
 
 struct solicitud {
-    char metodo[8];
+    char metodo[16];
     char ruta[256];
     char version[16];
     char host[256];
     char user_agent[256];
-    size_t content_length;
-    int tiene_content_length;
-    int mantener_conexion; /* 1 = keep-alive, 0 = cerrar*/
+    int  mantener_conexion;
 };
 
 enum resultado_analisis analizar_solicitud(const char *buffer,
-                                         struct solicitud *solicitud);  
+                                           struct solicitud *solicitud);
 
-int construir_respuesta(char *buffer,
-                        size_t capacidad,
-                        size_t *tamanio);
+int construir_cabecera(char *buffer, size_t capacidad,
+                       int codigo, const char *tipo_mime,
+                       size_t longitud_cuerpo, int mantener_conexion);
 
-int analizar_formulario(const char *cuerpo,
-                        size_t tamanio,
-                        char *nombre,
-                        size_t capacidad_nombre,
-                        char *valor,
-                        size_t capacidad_valor);
+int enviar_error(int cliente, int codigo, int mantener_conexion);
+
+// Atiende UNA petición (cabeceras en buffer[0..tam)).
+// Devuelve 1 si hay que mantener la conexión, 0 si hay que cerrarla.
+int procesar_peticion(int cliente, char *buffer, size_t tam,
+                      const char *raiz);
 
 #endif

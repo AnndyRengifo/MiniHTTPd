@@ -1,222 +1,208 @@
-
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
+#include <signal.h>
+#include <stdint.h>
+#include <sys/socket.h>
+#include <sys/epoll.h>
 
 #include "server.h"
 #include "http.h"
 
-// Recibe la solicitud hasta completar cabeceras y cuerpo
-static int recibir_solicitud_completa(int cliente,
-                                      char *buffer,
-                                      size_t capacidad,
-                                      struct solicitud *solicitud,
-                                      size_t *tamanio_total) {
-    ssize_t bytes;
-    size_t total = 0;
-    size_t fin_cabeceras;
-    size_t tamanio_esperado;
-    char *fin;
+#define MAX_EVENTOS 64
 
-    // Recibimos datos hasta encontrar el final de las cabeceras
-    while (1) {
+// Estado de UNA conexión: sobrevive entre llamadas a epoll_wait
+struct conexion {
+    int    fd;
+    size_t usado;                    // bytes acumulados en buffer
+    char   buffer[MAX_CABECERA + 1]; // +1 para el '\0'
+};
 
-        if (total >= capacidad - 1) {
-            return -1;
-        }
+static volatile sig_atomic_t terminar = 0;
 
-        bytes = recibir_datos(cliente, buffer + total,
-                              (int)(capacidad - total));
-
-        if (bytes <= 0) {
-            return -1;
-        }
-
-        total += (size_t)bytes;
-
-        fin = strstr(buffer, "\r\n\r\n");
-
-        if (fin != NULL) {
-            fin_cabeceras = (size_t)(fin - buffer) + 4;
-            break;
-        }
-    }
-
-    // Analizamos las cabeceras para conocer Content-Length
-    if (analizar_solicitud(buffer, solicitud) == -1) {
-        return -1;
-    }
-
-    tamanio_esperado = fin_cabeceras;
-
-    // Calculamos cuánto debe medir la solicitud completa
-    if (solicitud->tiene_content_length) {
-
-        if (solicitud->content_length >
-            capacidad - fin_cabeceras - 1) {
-            return -1;
-        }
-
-        tamanio_esperado += solicitud->content_length;
-    }
-
-    // Seguimos recibiendo hasta completar el cuerpo
-    while (total < tamanio_esperado) {
-
-        if (total >= capacidad - 1) {
-            return -1;
-        }
-
-        bytes = recibir_datos(cliente, buffer + total,
-                              (int)(capacidad - total));
-
-        if (bytes <= 0) {
-            return -1;
-        }
-
-        total += (size_t)bytes;
-    }
-
-    *tamanio_total = total;
-
-    return 0;
+static void manejar_sigint(int senal) {
+    (void)senal;
+    terminar = 1;
 }
 
-int main(void) {
-    int servidor;
-    int cliente;
+static void cerrar_conexion(int epfd, struct conexion *c) {
+    epoll_ctl(epfd, EPOLL_CTL_DEL, c->fd, NULL);
+    close(c->fd);
+    free(c);
+}
 
-    char buffer[4096];
-    char respuesta[1024];
-    char nombre[128];
-    char valor[256];
-    char *inicio_cuerpo;
-    char *fin_cabeceras;
+static void aceptar_nuevos(int epfd, int servidor) {
+    while (1) {                       // pueden haber llegado varios
+        struct conexion *c;
+        struct epoll_event ev;
+        int cliente = aceptar_cliente(servidor);
 
-    size_t tamanio_solicitud;
-    size_t tamanio_respuesta;
-    size_t tamanio_cabeceras;
-    size_t tamanio_cuerpo;
+        if (cliente == -1) {
+            if (errno == EINTR) {
+                continue;
+            }
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                perror("Error accept");
+            }
+            return;
+        }
 
-    struct solicitud solicitud;
+        if (poner_no_bloqueante(cliente) == -1) {
+            close(cliente);
+            continue;
+        }
 
-    servidor = iniciar_servidor(8080);
+        c = calloc(1, sizeof(*c));
+        if (c == NULL) {
+            close(cliente);
+            continue;
+        }
+        c->fd = cliente;
 
+        ev.events = EPOLLIN;
+        ev.data.ptr = c;              // así recuperamos la conexión
+
+        if (epoll_ctl(epfd, EPOLL_CTL_ADD, cliente, &ev) == -1) {
+            perror("Error epoll_ctl");
+            close(cliente);
+            free(c);
+        }
+    }
+}
+
+static void atender_cliente(int epfd, struct conexion *c,
+                            const char *raiz) {
+    ssize_t n;
+    char *fin;
+    size_t tam;
+
+    n = recibir_datos(c->fd, c->buffer + c->usado,
+                      MAX_CABECERA - c->usado);
+
+    if (n == 0) {                     // el cliente cerró
+        cerrar_conexion(epfd, c);
+        return;
+    }
+    if (n < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            return;                   // nada que leer por ahora
+        }
+        cerrar_conexion(epfd, c);
+        return;
+    }
+
+    c->usado += (size_t)n;
+
+    // Puede haber 0, 1 o varias peticiones completas en el buffer
+    while ((fin = memmem(c->buffer, c->usado, "\r\n\r\n", 4)) != NULL) {
+
+        tam = (size_t)(fin - c->buffer) + 4;
+
+        if (!procesar_peticion(c->fd, c->buffer, tam, raiz)) {
+            cerrar_conexion(epfd, c);
+            return;
+        }
+
+        // Descartamos la petición atendida; el resto pasa al inicio
+        memmove(c->buffer, c->buffer + tam, c->usado - tam);
+        c->usado -= tam;
+    }
+
+    // Buffer lleno y sin fin de cabeceras: petición demasiado grande
+    if (c->usado >= MAX_CABECERA) {
+        printf("- - 400 \"cabeceras demasiado grandes\"\n");
+        enviar_error(c->fd, 400, 0);
+        cerrar_conexion(epfd, c);
+    }
+}
+
+int main(int argc, char *argv[]) {
+    int puerto = 8080;
+    const char *raiz = "www";
+    int servidor, epfd, cantidad;
+    struct epoll_event ev, eventos[MAX_EVENTOS];
+    struct sigaction sa;
+
+    if (argc > 1) {
+        char *fin;
+        long p = strtol(argv[1], &fin, 10);
+        if (*fin != '\0' || p < 1 || p > 65535) {
+            fprintf(stderr, "Uso: %s [puerto] [carpeta]\n", argv[0]);
+            return 1;
+        }
+        puerto = (int)p;
+    }
+    if (argc > 2) {
+        raiz = argv[2];
+    }
+
+    // Un cliente que se desconecta no debe matar al servidor
+    signal(SIGPIPE, SIG_IGN);
+
+    // Ctrl+C sale del bucle limpiamente (sin SA_RESTART, para que
+    // epoll_wait devuelva EINTR y revisemos la bandera)
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = manejar_sigint;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+
+    servidor = iniciar_servidor(puerto);
     if (servidor == -1) {
-        perror("Error al iniciar el servidor");
+        return 1;
+    }
+    if (poner_no_bloqueante(servidor) == -1) {
+        perror("Error fcntl");
+        close(servidor);
         return 1;
     }
 
-    printf("MiniHTTPd escuchando en el puerto 8080...\n");
-
-    while (1) {
-
-        cliente = aceptar_cliente(servidor);
-
-        if (cliente == -1) {
-            perror("Error al aceptar cliente");
-            continue;
-        }
-
-        // Recibimos la solicitud completa
-        if (recibir_solicitud_completa(cliente, buffer,
-                                       sizeof(buffer), &solicitud,
-                                       &tamanio_solicitud) == -1) {
-
-            printf("Solicitud incompleta, invalida o demasiado grande\n");
-            close(cliente);
-            continue;
-        }
-
-        //locallizamos el final de las cabeceras
-        fin_cabeceras = strstr(buffer, "\r\n\r\n");
-
-        if (fin_cabeceras == NULL){
-            printf("No se encontraron las cabeceras HTTP\n");
-            close(cliente);
-            continue;
-        }
-
-        //calculamos donde comienza el cuerpo
-        inicio_cuerpo = fin_cabeceras + 4;
-
-        tamanio_cabeceras = (size_t)(inicio_cuerpo - buffer);
-        tamanio_cuerpo = tamanio_solicitud - tamanio_cabeceras;
-
-        // Procesamos los datos enviados mediante POST
-        if (strcmp(solicitud.metodo, "POST") == 0) {
-
-            if (!solicitud.tiene_content_length ||
-                tamanio_cuerpo != solicitud.content_length) {
-
-                printf("El tamanio del cuerpo no coincide\n");
-                close(cliente);
-                continue;
-            }
-
-            if (analizar_formulario(inicio_cuerpo, tamanio_cuerpo,
-                                    nombre, sizeof(nombre),
-                                    valor, sizeof(valor)) == -1) {
-
-                printf("No se pudo analizar el formulario\n");
-                close(cliente);
-                continue;
-            }
-
-            printf("\nDatos del formulario:\n");
-            printf("Nombre del campo: %s\n", nombre);
-            printf("Valor del campo: %s\n", valor);
-        }
-
-        printf("\nSolicitud recibida (%zu bytes):\n",
-               tamanio_solicitud);
-               
-        printf("Tamanio de cabeceras: %zu bytes\n",
-               tamanio_cabeceras);
-
-        printf("Tamanio del cuerpo: %zu bytes\n",
-               tamanio_cuerpo);
-
-        printf("Cuerpo recibido: ");
-
-        if (tamanio_cuerpo > 0){
-            fwrite(inicio_cuerpo, 1, tamanio_cuerpo, stdout);
-        }
-
-        printf("\n");
-
-        // Mostramos los datos extraídos
-        printf("Metodo: %s\n", solicitud.metodo);
-        printf("Ruta: %s\n", solicitud.ruta);
-        printf("Version: %s\n", solicitud.version);
-        printf("Host: %s\n", solicitud.host);
-        printf("User-Agent: %s\n", solicitud.user_agent);
-
-        if (solicitud.tiene_content_length) {
-            printf("Content-Length: %zu\n",
-                   solicitud.content_length);
-        } else {
-            printf("Content-Length: no especificado\n");
-        }
-
-        // Construimos la respuesta HTTP
-        if (construir_respuesta(respuesta, sizeof(respuesta),
-                                &tamanio_respuesta) == -1) {
-            printf("Error al construir respuesta\n");
-            close(cliente);
-            continue;
-        }
-
-        // Enviamos la respuesta
-        if (enviar_datos(cliente, respuesta,
-                         tamanio_respuesta) == -1) {
-            perror("Error al enviar respuesta");
-        }
-
-        close(cliente);
+    epfd = epoll_create1(0);
+    if (epfd == -1) {
+        perror("Error epoll_create1");
+        close(servidor);
+        return 1;
     }
 
-    close(servidor);
+    // data.ptr == NULL identifica al socket servidor
+    ev.events = EPOLLIN;
+    ev.data.ptr = NULL;
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, servidor, &ev) == -1) {
+        perror("Error epoll_ctl");
+        close(epfd);
+        close(servidor);
+        return 1;
+    }
 
+    printf("MiniHTTPd en http://localhost:%d  (carpeta: %s)\n",
+           puerto, raiz);
+
+    while (!terminar) {
+        cantidad = epoll_wait(epfd, eventos, MAX_EVENTOS, -1);
+
+        if (cantidad == -1) {
+            if (errno == EINTR) {
+                continue;
+            }
+            perror("Error epoll_wait");
+            break;
+        }
+
+        for (int i = 0; i < cantidad; i++) {
+            struct conexion *c = eventos[i].data.ptr;
+
+            if (c == NULL) {
+                aceptar_nuevos(epfd, servidor);
+            } else {
+                atender_cliente(epfd, c, raiz);
+            }
+        }
+    }
+
+    printf("\nCerrando servidor...\n");
+    close(epfd);
+    close(servidor);
     return 0;
 }
