@@ -199,3 +199,49 @@ int construir_respuesta(char *buffer, size_t capacidad, size_t *tamanio) {
 
     return 0;
 }
+
+//Extrae el primer campo de un formulario nombre=valor
+int analizar_formulario(const char *cuerpo, size_t tamanio,
+                        char *nombre, size_t capacidad_nombre,
+                        char *valor, size_t capacidad_valor) {
+
+    const char *igual;
+    const char *separador;
+    size_t longitud_nombre;
+    size_t longitud_valor;
+
+    // Buscamos el signo =
+    igual = memchr(cuerpo, '=', tamanio);
+
+    if (igual == NULL || igual == cuerpo) {
+        return -1;
+    }
+
+    // Calculamos el tamaño del nombre
+    longitud_nombre = (size_t)(igual - cuerpo);
+
+    // Buscamos el siguiente campo separado por &
+    separador = memchr(igual + 1, '&',
+                       tamanio - longitud_nombre - 1);
+
+    if (separador != NULL) {
+        longitud_valor = (size_t)(separador - igual - 1);
+    } else {
+        longitud_valor = tamanio - longitud_nombre - 1;
+    }
+
+    // Comprobamos que los campos tengan espacio suficiente
+    if (longitud_nombre >= capacidad_nombre ||
+        longitud_valor >= capacidad_valor) {
+        return -1;
+    }
+
+    // Copiamos el nombre y el valor
+    memcpy(nombre, cuerpo, longitud_nombre);
+    nombre[longitud_nombre] = '\0';
+
+    memcpy(valor, igual + 1, longitud_valor);
+    valor[longitud_valor] = '\0';
+
+    return 0;
+}

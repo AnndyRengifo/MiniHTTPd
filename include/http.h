@@ -13,8 +13,18 @@ struct solicitud {
     int tiene_content_length;
 };
 
-int analizar_solicitud(const char *buffer, struct solicitud *solicitud);
+int analizar_solicitud(const char *buffer,
+                       struct solicitud *solicitud);
 
-int construir_respuesta(char *buffer, size_t capacidad, size_t *tamanio);
+int construir_respuesta(char *buffer,
+                        size_t capacidad,
+                        size_t *tamanio);
+
+int analizar_formulario(const char *cuerpo,
+                        size_t tamanio,
+                        char *nombre,
+                        size_t capacidad_nombre,
+                        char *valor,
+                        size_t capacidad_valor);
 
 #endif
