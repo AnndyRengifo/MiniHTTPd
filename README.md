@@ -1,50 +1,56 @@
 # MiniHTTPd
 
-Servidor HTTP/1.1 básico en C para Linux, sin bibliotecas externas.
-Usa `epoll` para atender varios clientes en un solo hilo, con conexiones persistentes (keep-alive).
+Servidor HTTP/1.1 desarrollado en C para Linux, sin bibliotecas HTTP externas. Utiliza `epoll` para atender varios clientes y permite mantener conexiones abiertas mediante `keep-alive`.
 
 ## Compilar y ejecutar
 
 ```bash
 make
-./minihttpd            # puerto 8080, carpeta www/
-./minihttpd 9000 www   # puerto y carpeta personalizados
+./minihttpd             # Puerto 8080 y carpeta www/
+./minihttpd 9000 www    # Puerto y carpeta personalizados
 ```
 
-Abrir `http://localhost:8080` en el navegador. `Ctrl+C` detiene el servidor.
+Abre [http://localhost:8080](http://localhost:8080) en el navegador. Para detenerlo, presiona `Ctrl+C`.
 
 ## Estructura
 
-| Archivo | Función |
+| Archivo | Descripción |
 |---|---|
-| `src/main.c` | Bucle de eventos con `epoll` |
-| `src/server.c` | Sockets: `socket`, `bind`, `listen`, `accept`, `recv`, `send` |
-| `src/http.c` | Parsing de la petición GET y generación de la respuesta |
-| `src/files.c` | Acceso seguro a los archivos estáticos (`realpath`) |
-| `src/mime.c` | Tipos MIME según la extensión |
-| `www/` | Archivos servidos (`index.html`, `style.css`, `image.png`) |
+| `main.c` | Manejo de eventos con `epoll`. |
+| `server.c` | Creación y manejo de sockets. |
+| `http.c` | Análisis de peticiones y respuestas HTTP. |
+| `files.c` | Lectura y validación de archivos. |
+| `mime.c` | Identificación de tipos MIME. |
+| `www/` | Archivos disponibles para los clientes. |
 
 ## Características
 
-- Solo método `GET`; cualquier otro método responde `405 Method Not Allowed`.
-- Cabeceras usadas: `Host` (obligatoria en HTTP/1.1), `Connection`, `User-Agent` (aparece en el log).
-- Códigos de estado: 200, 400, 403, 404, 405, 500.
-- Tipos MIME: `.html`, `.css`, `.js`, `.png`, `.jpg`/`.jpeg`.
+- Atiende peticiones `GET`; otros métodos reciben `405`.
+- Maneja las cabeceras `Host`, `Connection` y `User-Agent`.
+- Responde con los códigos `200`, `400`, `403`, `404`, `405` y `500`.
+- Reconoce archivos HTML, CSS, JavaScript, PNG y JPG.
 
 ## Seguridad
 
-| Ataque | Defensa |
-|---|---|
-| Directory traversal (`/../../etc/passwd`) | Decodificar `%XX`, rechazar `..` y comprobar con `realpath()` que la ruta quede dentro de `www/` → 403 |
-| Buffer overflow | Sin `strcpy`/`sprintf`: se usan `memcpy` con límite y `snprintf` |
-| Métodos inválidos | Todo lo que no sea `GET` → 405 |
-| Peticiones grandes | Línea > 2048, URI > 255, cabeceras > 8 KB o > 50 cabeceras → 400 |
+Se aplican controles para evitar problemas comunes:
 
-## Pruebas rápidas
+- **Directory Traversal:** validación de rutas y uso de `realpath()` para restringir el acceso a `www/`.
+- **Desbordamiento de búfer:** uso de operaciones con límites de tamaño.
+- **Métodos no permitidos:** rechazo de métodos distintos de `GET`.
+- **Peticiones demasiado grandes:** límites para la URI, línea de solicitud y cabeceras.
+
+## Pruebas
 
 ```bash
+# Solicitud normal
 curl -i http://localhost:8080/
-curl -i --path-as-is http://localhost:8080/../../etc/passwd   # 403
-curl -i -X POST http://localhost:8080/                        # 405
-curl -i http://localhost:8080/noexiste                        # 404
+
+# Intento de Directory Traversal
+curl -i --path-as-is http://localhost:8080/../../etc/passwd
+
+# Método no permitido
+curl -i -X POST http://localhost:8080/
+
+# Archivo inexistente
+curl -i http://localhost:8080/noexiste
 ```
