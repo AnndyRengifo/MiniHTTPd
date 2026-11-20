@@ -10,7 +10,7 @@ make
 ./minihttpd 9000 www    # Puerto y carpeta personalizados
 ```
 
-Abre [http://localhost:8080](http://localhost:8080) en el navegador. Para detenerlo, presiona `Ctrl+C`.
+Abrir [http://localhost:8080](http://localhost:8080) en el navegador. Para detenerlo, presiona `Ctrl+C`.
 
 ## Estructura
 
@@ -28,7 +28,6 @@ Abre [http://localhost:8080](http://localhost:8080) en el navegador. Para detene
 - Atiende peticiones `GET`; otros métodos reciben `405`.
 - Maneja las cabeceras `Host`, `Connection` y `User-Agent`.
 - Responde con los códigos `200`, `400`, `403`, `404`, `405` y `500`.
-- Reconoce archivos HTML, CSS, JavaScript, PNG y JPG.
 
 ## Seguridad
 
