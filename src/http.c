@@ -1,14 +1,3 @@
-/*
- * http.c - Parsing de la petición GET y generación de la respuesta.
- *
- * Una petición HTTP/1.1 tiene esta forma (cada línea termina en \r\n):
- *
- *   GET /index.html HTTP/1.1      <- línea de solicitud
- *   Host: localhost:8080          <- cabeceras "Nombre: valor"
- *   User-Agent: curl/8.0
- *   Connection: keep-alive
- *                                 <- línea vacía = fin de cabeceras
- */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -21,7 +10,6 @@
 #include "server.h"
 
 // Copia un campo verificando que tenga espacio suficiente.
-// Reemplaza a strcpy: si no cabe, error (nunca desborda).
 static int copiar_campo(char *destino, size_t capacidad,
                         const char *origen, size_t longitud) {
     if (longitud >= capacidad) {
@@ -32,7 +20,6 @@ static int copiar_campo(char *destino, size_t capacidad,
     return 0;
 }
 
-// Copia [inicio, fin) quitando espacios/tabulaciones en los extremos
 static int extraer_valor(const char *inicio, const char *fin,
                          char *destino, size_t capacidad) {
     while (inicio < fin && (*inicio == ' ' || *inicio == '\t')) {
@@ -59,8 +46,7 @@ enum resultado_analisis analizar_solicitud(const char *buffer,
 
     memset(solicitud, 0, sizeof(*solicitud));
 
-    // ---- 1. Línea de solicitud: METODO RUTA VERSION ----
-    // Se separa por los dos espacios: sp1 y sp2
+    // Se separa por los dos espacios sp1 y sp2
     fin_linea = strstr(buffer, "\r\n");
     if (fin_linea == NULL) {
         return ANALISIS_SOLICITUD_INVALIDA;
@@ -79,7 +65,7 @@ enum resultado_analisis analizar_solicitud(const char *buffer,
         return ANALISIS_SOLICITUD_INVALIDA;
     }
 
-    // URI más larga que MAX_URI: se RECHAZA (no se trunca en silencio)
+    // URI mas larga que MAX_URI RECHAZA no se trunca
     if (sp2 - sp1 - 1 <= 0 || (size_t)(sp2 - sp1 - 1) > MAX_URI) {
         return ANALISIS_SOLICITUD_INVALIDA;
     }
@@ -93,7 +79,7 @@ enum resultado_analisis analizar_solicitud(const char *buffer,
         return ANALISIS_SOLICITUD_INVALIDA;
     }
 
-    // Primero la versión (basura -> 400), después el método (-> 405)
+    // Primero la version basura - 400 despues el metodo - 405
     if (strcmp(solicitud->version, "HTTP/1.1") != 0 &&
         strcmp(solicitud->version, "HTTP/1.0") != 0) {
         return ANALISIS_SOLICITUD_INVALIDA;
@@ -103,11 +89,9 @@ enum resultado_analisis analizar_solicitud(const char *buffer,
         return ANALISIS_METODO_NO_PERMITIDO;
     }
 
-    // HTTP/1.1 es persistente por defecto; HTTP/1.0 se cierra por defecto
     solicitud->mantener_conexion =
         (strcmp(solicitud->version, "HTTP/1.1") == 0);
 
-    // ---- 2. Cabeceras: una por línea, "Nombre: valor" ----
     fin = strstr(buffer, "\r\n\r\n");
     if (fin == NULL) {
         return ANALISIS_SOLICITUD_INVALIDA;
@@ -131,17 +115,14 @@ enum resultado_analisis analizar_solicitud(const char *buffer,
             return ANALISIS_SOLICITUD_INVALIDA;
         }
 
-        // Nombre demasiado largo: no es una cabecera que nos interese
+        // Nombre demasiado largo
         if (copiar_campo(nombre, sizeof(nombre), linea,
                          (size_t)(dos_puntos - linea)) == 0) {
 
-            // Los nombres de cabecera no distinguen mayúsculas
             for (size_t i = 0; nombre[i] != '\0'; i++) {
                 nombre[i] = (char)tolower((unsigned char)nombre[i]);
             }
 
-            // Solo copiamos el valor de las cabeceras que usamos
-            // (así un Cookie largo de un navegador no da 400)
             if (strcmp(nombre, "host") == 0) {
                 if (extraer_valor(dos_puntos + 1, separador,
                                   solicitud->host,
@@ -170,7 +151,6 @@ enum resultado_analisis analizar_solicitud(const char *buffer,
         linea = separador + 2;
     }
 
-    // RFC 7230: HTTP/1.1 sin Host es una petición inválida
     if (strcmp(solicitud->version, "HTTP/1.1") == 0 &&
         solicitud->host[0] == '\0') {
         return ANALISIS_SOLICITUD_INVALIDA;
@@ -190,14 +170,6 @@ static const char *texto_estado(int codigo) {
     }
 }
 
-// Escribe SOLO la cabecera. Devuelve su longitud o -1 si no cabe.
-// snprintf (no sprintf) nunca escribe más de 'capacidad' bytes.
-// Respuesta generada:
-//   HTTP/1.1 200 OK
-//   Content-Type: text/html          <- tipo MIME (mime.c)
-//   Content-Length: 347              <- tamaño exacto del cuerpo
-//   Connection: keep-alive | close
-//   (línea vacía y luego el cuerpo)
 int construir_cabecera(char *buffer, size_t capacidad,
                        int codigo, const char *tipo_mime,
                        size_t longitud_cuerpo, int mantener_conexion) {
@@ -221,7 +193,7 @@ int construir_cabecera(char *buffer, size_t capacidad,
     return r;
 }
 
-// Respuesta de error con un pequeño cuerpo HTML (400, 403, 404...)
+// Respuesta de error con un pequeño cuerpo HTML 400, 403, 404..
 int enviar_error(int cliente, int codigo, int mantener_conexion) {
     char cuerpo[160];
     char cabecera[512];
@@ -248,7 +220,7 @@ int enviar_error(int cliente, int codigo, int mantener_conexion) {
     return 0;
 }
 
-// Una línea de log por petición (aquí se aprovecha User-Agent)
+// Una linea de log por peticio
 static void registrar(const struct solicitud *sol, int codigo) {
     printf("%s %s %d \"%s\"\n",
            sol->metodo[0] ? sol->metodo : "-",
@@ -258,8 +230,6 @@ static void registrar(const struct solicitud *sol, int codigo) {
     fflush(stdout);
 }
 
-// Flujo completo: analizar -> resolver ruta (files.c) -> leer archivo
-// -> cabecera con MIME -> enviar. Devuelve 1 = keep-alive, 0 = cerrar.
 int procesar_peticion(int cliente, char *buffer, size_t tam,
                       const char *raiz) {
     struct solicitud sol;
@@ -273,16 +243,11 @@ int procesar_peticion(int cliente, char *buffer, size_t tam,
     int mantener;
     char guardado;
 
-    // analizar_solicitud espera una cadena terminada en '\0': la cerramos
-    // al final de ESTA petición y luego restauramos el byte (puede ser el
-    // inicio de una petición encadenada / pipelining).
     guardado = buffer[tam];
     buffer[tam] = '\0';
     r = analizar_solicitud(buffer, &sol);
     buffer[tam] = guardado;
 
-    // Tras 400 o 405 cerramos siempre: pueden quedar bytes de un cuerpo
-    // sin leer y no podemos fiarnos de dónde empieza la siguiente petición
     if (r == ANALISIS_SOLICITUD_INVALIDA) {
         registrar(&sol, 400);
         enviar_error(cliente, 400, 0);

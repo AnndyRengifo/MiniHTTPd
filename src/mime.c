@@ -1,7 +1,3 @@
-/*
- * mime.c - Tipo de contenido (Content-Type) según la extensión.
- * El navegador lo usa para saber cómo interpretar el cuerpo.
- */
 #include <string.h>
 #include <strings.h>
 
@@ -12,7 +8,6 @@ struct tipo_mime {
     const char *tipo;
 };
 
-// Tabla extensión -> tipo MIME (se recorre de forma lineal)
 static const struct tipo_mime tipos[] = {
     {".html", "text/html"},
     {".css",  "text/css"},
@@ -26,7 +21,6 @@ const char *obtener_tipo_mime(const char *ruta) {
     const char *extension;
     size_t cantidad;
 
-    // strrchr: ÚLTIMO '.' de la ruta ("a.b.png" -> ".png")
     extension = strrchr(ruta, '.');
 
     if (extension == NULL) {
@@ -41,6 +35,5 @@ const char *obtener_tipo_mime(const char *ruta) {
         }
     }
 
-    // Desconocido: binario genérico (el navegador lo descarga)
     return "application/octet-stream";
 }
